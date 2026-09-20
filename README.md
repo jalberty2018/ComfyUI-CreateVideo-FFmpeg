@@ -22,13 +22,20 @@ VideoHelperSuite does not need to be installed.
 Optional AUDIO input: one mono or stereo batch. Audio is encoded as AAC,
 padded with silence if shorter than the video and trimmed if longer.
 
+The `report` STRING output shows the encoder actually used, for example
+`Encoder used: h264_nvenc` or `Encoder used: libx264`, including when `auto`
+is selected. Connect it to a text display node for debugging.
+
 On Save Video select **format mp4 (or auto)** and **codec auto**. MKV is also
 supported. The node's VIDEO object overrides saving to use external FFmpeg
 stream-copy, preserving encoded video/audio and adding workflow metadata.
 No second video encoding occurs. Re-encoding options on Save Video are rejected;
 set quality on this node instead. WebM is not supported by this implementation.
 
-Encoders: `h264_nvenc` (default), `hevc_nvenc`, `av1_nvenc`, `libx264` (CPU).
+Encoders: `auto` (default), `h264_nvenc`, `hevc_nvenc`, `av1_nvenc`, `libx264` (CPU).
+`auto` selects `h264_nvenc` when `NVENC_ENABLED_HOST` is present in the ComfyUI
+process environment (regardless of its value), otherwise `libx264`.
+Explicit encoder selections override this automatic choice.
 NVENC requires a compatible NVIDIA GPU, driver, FFmpeg build and container GPU
 video-driver access. AV1 encoding requires a GPU supporting AV1 NVENC.
 No silent CPU fallback occurs. Lower quality numbers mean higher quality and

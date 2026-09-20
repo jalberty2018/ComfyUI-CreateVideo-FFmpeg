@@ -15,7 +15,7 @@ import comfy.utils
 from comfy_api.latest import InputImpl
 
 
-ENCODERS = ("h264_nvenc", "hevc_nvenc", "av1_nvenc", "libx264")
+ENCODERS = ("auto", "h264_nvenc", "hevc_nvenc", "av1_nvenc", "libx264")
 
 
 def resolve_ffmpeg(value=""):
@@ -116,20 +116,23 @@ class CreateVideoExternalFFmpeg:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE",),
-                "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.01}),
-                "encoder": (list(ENCODERS), {"default": "h264_nvenc"}),
+                "images": ("IMAGE", {"tooltip": "RGB image batch to encode as video. Width and height must be even. Supports 8-bit SDR output; no HDR or alpha."}),
+                "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.01,
+                    "tooltip": "Frames per second. Video duration is the number of input images divided by fps. Does not generate or interpolate frames."}),
+                "encoder": (list(ENCODERS), {"default": "auto",
+                    "tooltip": "auto: uses h264_nvenc when NVENC_ENABLED_HOST is present (any value), otherwise libx264. h264_nvenc: NVIDIA GPU H.264. hevc_nvenc: NVIDIA GPU HEVC/H.265. av1_nvenc: NVIDIA GPU AV1, requires AV1 encoding support. libx264: CPU H.264. Explicit selections override auto; failed GPU encoding does not fall back to CPU."}),
                 "quality": ("INT", {"default": 20, "min": 1, "max": 51,
-                    "tooltip": "Lower means higher quality/larger files. NVENC CQ; libx264 CRF."}),
-                "nvenc_preset": (["p1", "p2", "p3", "p4", "p5", "p6", "p7"], {"default": "p4"}),
+                    "tooltip": "Encoding quality from 1 to 51: lower values give higher quality and usually larger files. Uses CQ for NVENC and CRF for libx264. Default: 20. Set quality here; Save Video preserves the encoded stream."}),
+                "nvenc_preset": (["p1", "p2", "p3", "p4", "p5", "p6", "p7"], {"default": "p4",
+                    "tooltip": "NVIDIA encoding speed/quality tradeoff: p1 is fastest, p7 is slowest with better compression efficiency. p4 is the default balance. Applies only to NVENC; libx264 always uses medium."}),
                 "ffmpeg_path": ("STRING", {"default": "",
-                    "tooltip": "Empty: VHS_FORCE_FFMPEG_PATH, then PATH. Linux example: /usr/bin/ffmpeg"}),
+                    "tooltip": "FFmpeg executable on the ComfyUI server/container. Leave empty to use VHS_FORCE_FFMPEG_PATH, then ffmpeg on PATH. Example: /usr/bin/ffmpeg. NVENC requires an FFmpeg build with the selected encoder and access to a compatible NVIDIA GPU/driver."}),
             },
-            "optional": {"audio": ("AUDIO",)},
+            "optional": {"audio": ("AUDIO", {"tooltip": "Optional audio: one mono or stereo waveform batch. Encoded as AAC at 192 kbps. Short audio is padded with silence; long audio is trimmed to the video duration."})},
         }
 
-    RETURN_TYPES = ("VIDEO",)
-    RETURN_NAMES = ("video",)
+    RETURN_TYPES = ("VIDEO", "STRING")
+    RETURN_NAMES = ("video", "report")
     FUNCTION = "create_video"
     CATEGORY = "video/External FFmpeg"
     DESCRIPTION = "Encode 8-bit SDR images with external FFmpeg/NVENC. Connect to Save Video with codec auto."
@@ -137,6 +140,8 @@ class CreateVideoExternalFFmpeg:
     def create_video(self, images, fps, encoder, quality, nvenc_preset, ffmpeg_path="", audio=None):
         if encoder not in ENCODERS:
             raise ValueError("Unsupported encoder")
+        if encoder == "auto":
+            encoder = "h264_nvenc" if "NVENC_ENABLED_HOST" in os.environ else "libx264"
         if not math.isfinite(fps) or not 1 <= fps <= 240:
             raise ValueError("fps must be between 1 and 240")
         if not 1 <= quality <= 51 or nvenc_preset not in {f"p{i}" for i in range(1, 8)}:
@@ -209,7 +214,8 @@ class CreateVideoExternalFFmpeg:
                                 process.stdin.close()
                             except BrokenPipeError:
                                 pass
-            return (ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder),)
+            return (ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder),
+                    f"Encoder used: {encoder}")
         except BaseException:
             if os.path.exists(output):
                 os.unlink(output)
