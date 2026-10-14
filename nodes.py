@@ -16,6 +16,48 @@ from comfy_api.latest import InputImpl
 
 
 ENCODERS = ("auto", "h264_nvenc", "hevc_nvenc", "av1_nvenc", "libx264")
+COLOR_SPACES = {
+    "sRGB": ("bt709", "bt709", "iec61966-2-1"),
+    "HDR": ("bt2020", "bt2020", "arib-std-b67"),
+    "HDR PQ": ("bt2020", "bt2020", "smpte2084"),
+}
+
+
+def encoding_settings(encoder, bit_depth, color_space):
+    if color_space not in COLOR_SPACES:
+        raise ValueError("color_space must be sRGB, HDR or HDR PQ")
+    if bit_depth not in ("auto", 8, 10, "8", "10"):
+        raise ValueError("bit_depth must be auto, 8 or 10")
+    depth = (8 if color_space == "sRGB" else 10) if bit_depth == "auto" else int(bit_depth)
+    if encoder not in ENCODERS:
+        raise ValueError("Unsupported encoder")
+    if encoder == "auto":
+        encoder = ("hevc_nvenc" if depth == 10 else "h264_nvenc") if "NVENC_ENABLED_HOST" in os.environ else "libx264"
+    if encoder == "h264_nvenc" and depth == 10:
+        raise ValueError("10-bit H.264 NVENC is not supported by Ubuntu 24.04 FFmpeg 6.1. Use hevc_nvenc, av1_nvenc or libx264.")
+    pixel_format = ("p010le" if encoder.endswith("_nvenc") else "yuv420p10le") if depth == 10 else "yuv420p"
+    matrix, primaries, transfer = COLOR_SPACES[color_space]
+    colorspace = "bt709" if color_space == "sRGB" else "bt2020nc"
+    # Tag filter frames too: encoder initialization may inherit their properties.
+    filters = (f"scale=in_range=full:out_range=limited:out_color_matrix={matrix},"
+               f"format={pixel_format},setparams=range=limited:color_primaries={primaries}:"
+               f"color_trc={transfer}:colorspace={colorspace}")
+    color_args = ["-vf", filters,
+                  "-pix_fmt", pixel_format, "-color_range", "tv",
+                  "-colorspace", colorspace,
+                  "-color_primaries", primaries, "-color_trc", transfer]
+    return encoder, depth, color_args
+
+
+def check_pixel_format(ffmpeg, encoder, pixel_format):
+    result = subprocess.run([ffmpeg, "-hide_banner", "-h", f"encoder={encoder}"],
+                            stdin=subprocess.DEVNULL, capture_output=True)
+    help_text = (result.stdout + result.stderr).decode("utf-8", "replace")
+    supported = next((line.split(":", 1)[1].split() for line in help_text.splitlines()
+                      if "Supported pixel formats:" in line), [])
+    if result.returncode or pixel_format not in supported:
+        raise RuntimeError(f"This FFmpeg build does not advertise {encoder} with {pixel_format}. "
+                           "Install an FFmpeg build supporting this encoder/bit depth or select another encoder.")
 
 
 def resolve_ffmpeg(value=""):
@@ -42,12 +84,13 @@ def value_of(value):
 class ExternalFFmpegVideo(InputImpl.VideoFromFile):
     """Use external stream-copy for Save Video; inherited decoding stays compatible."""
 
-    def __init__(self, path, ffmpeg, width, height, count, fps, encoder):
+    def __init__(self, path, ffmpeg, width, height, count, fps, encoder, bit_depth=8, color_space="sRGB"):
         super().__init__(path)
         self.path = path
         self.ffmpeg = ffmpeg
         self.width, self.height = width, height
         self.count, self.fps, self.encoder = count, fps, encoder
+        self.bit_depth, self.color_space = bit_depth, color_space
 
     def get_dimensions(self):
         return self.width, self.height
@@ -62,10 +105,10 @@ class ExternalFFmpegVideo(InputImpl.VideoFromFile):
         return float(self.count / self.fps)
 
     def get_bit_depth(self):
-        return 8
+        return self.bit_depth
 
     def get_color_space(self):
-        return "sRGB"
+        return self.color_space
 
     def get_container_format(self):
         return "mp4"
@@ -77,7 +120,7 @@ class ExternalFFmpegVideo(InputImpl.VideoFromFile):
                         "hevc_nvenc": "hevc", "av1_nvenc": "av1"}[self.encoder]
         if codec not in (None, "auto", source_codec):
             raise ValueError("Set Save Video codec to auto; select the encoder on Create Video (External FFmpeg / NVENC).")
-        if crf is not None or bit_depth not in (None, 8) or color_space not in (None, "auto", "sRGB"):
+        if crf is not None or bit_depth not in (None, self.bit_depth) or color_space not in (None, "auto", self.color_space):
             raise ValueError("This VIDEO is already encoded. Set quality on Create Video; disable re-encoding in Save Video.")
         is_file = isinstance(path, (str, os.PathLike))
         if container in (None, "auto"):
@@ -116,11 +159,11 @@ class CreateVideoExternalFFmpeg:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE", {"tooltip": "RGB image batch to encode as video. Width and height must be even. Supports 8-bit SDR output; no HDR or alpha."}),
+                "images": ("IMAGE", {"tooltip": "RGB image batch to encode as video. Width and height must be even. Input must already be in the selected color space; no alpha."}),
                 "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.01,
                     "tooltip": "Frames per second. Video duration is the number of input images divided by fps. Does not generate or interpolate frames."}),
                 "encoder": (list(ENCODERS), {"default": "auto",
-                    "tooltip": "auto: uses h264_nvenc when NVENC_ENABLED_HOST is present (any value), otherwise libx264. h264_nvenc: NVIDIA GPU H.264. hevc_nvenc: NVIDIA GPU HEVC/H.265. av1_nvenc: NVIDIA GPU AV1, requires AV1 encoding support. libx264: CPU H.264. Explicit selections override auto; failed GPU encoding does not fall back to CPU."}),
+                    "tooltip": "auto: uses h264_nvenc for 8-bit or hevc_nvenc for 10-bit when NVENC_ENABLED_HOST is present, otherwise libx264. AV1 requires a compatible NVIDIA GPU. H.264 NVENC is limited to 8-bit for Ubuntu 24.04 FFmpeg 6.1. Failed GPU encoding does not fall back to CPU."}),
                 "quality": ("INT", {"default": 20, "min": 1, "max": 51,
                     "tooltip": "Encoding quality from 1 to 51: lower values give higher quality and usually larger files. Uses CQ for NVENC and CRF for libx264. Default: 20. Set quality here; Save Video preserves the encoded stream."}),
                 "nvenc_preset": (["p1", "p2", "p3", "p4", "p5", "p6", "p7"], {"default": "p4",
@@ -128,20 +171,22 @@ class CreateVideoExternalFFmpeg:
                 "ffmpeg_path": ("STRING", {"default": "",
                     "tooltip": "FFmpeg executable on the ComfyUI server/container. Leave empty to use VHS_FORCE_FFMPEG_PATH, then ffmpeg on PATH. Example: /usr/bin/ffmpeg. NVENC requires an FFmpeg build with the selected encoder and access to a compatible NVIDIA GPU/driver."}),
             },
-            "optional": {"audio": ("AUDIO", {"tooltip": "Optional audio: one mono or stereo waveform batch. Encoded as AAC at 192 kbps. Short audio is padded with silence; long audio is trimmed to the video duration."})},
+            "optional": {
+                "audio": ("AUDIO", {"tooltip": "Optional audio: one mono or stereo waveform batch. Encoded as AAC at 192 kbps. Short audio is padded with silence; long audio is trimmed to the video duration."}),
+                "bit_depth": (["auto", 8, 10], {"default": "auto", "tooltip": "Auto uses 8-bit for sRGB and 10-bit for HDR. Explicit bit depth is independent of color space."}),
+                "color_space": (["sRGB", "HDR", "HDR PQ"], {"default": "sRGB", "tooltip": "Color space of the input images: sRGB, BT.2020/HLG (HDR), or BT.2020/PQ (HDR PQ). Does not convert SDR into HDR."}),
+            },
         }
 
     RETURN_TYPES = ("VIDEO", "STRING")
     RETURN_NAMES = ("video", "report")
     FUNCTION = "create_video"
     CATEGORY = "video/External FFmpeg"
-    DESCRIPTION = "Encode 8-bit SDR images with external FFmpeg/NVENC. Connect to Save Video with codec auto."
+    DESCRIPTION = "Encode 8/10-bit sRGB, HDR (HLG) or HDR PQ with external FFmpeg/NVENC. Connect to Save Video with codec auto."
 
-    def create_video(self, images, fps, encoder, quality, nvenc_preset, ffmpeg_path="", audio=None):
-        if encoder not in ENCODERS:
-            raise ValueError("Unsupported encoder")
-        if encoder == "auto":
-            encoder = "h264_nvenc" if "NVENC_ENABLED_HOST" in os.environ else "libx264"
+    def create_video(self, images, fps, encoder, quality, nvenc_preset, ffmpeg_path="", audio=None,
+                     bit_depth="auto", color_space="sRGB"):
+        encoder, bit_depth, color_args = encoding_settings(encoder, bit_depth, color_space)
         if not math.isfinite(fps) or not 1 <= fps <= 240:
             raise ValueError("fps must be between 1 and 240")
         if not 1 <= quality <= 51 or nvenc_preset not in {f"p{i}" for i in range(1, 8)}:
@@ -152,6 +197,7 @@ class CreateVideoExternalFFmpeg:
         if width < 2 or height < 2 or width % 2 or height % 2:
             raise ValueError("Video width and height must be positive even numbers for YUV 4:2:0. Resize images first.")
         ffmpeg = resolve_ffmpeg(ffmpeg_path)
+        check_pixel_format(ffmpeg, encoder, color_args[color_args.index("-pix_fmt") + 1])
         rate = Fraction(str(fps)).limit_denominator(100000)
         temp_root = folder_paths.get_temp_directory()
         os.makedirs(temp_root, exist_ok=True)
@@ -160,7 +206,7 @@ class CreateVideoExternalFFmpeg:
         try:
             with tempfile.TemporaryDirectory(prefix="ffmpeg-input-", dir=temp_root) as scratch:
                 command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-                    "-f", "rawvideo", "-pixel_format", "rgb24", "-video_size", f"{width}x{height}",
+                    "-f", "rawvideo", "-pixel_format", "rgb48le" if bit_depth == 10 else "rgb24", "-video_size", f"{width}x{height}",
                     "-framerate", f"{rate.numerator}/{rate.denominator}", "-i", "pipe:0"]
                 if audio is not None:
                     waveform = audio["waveform"]
@@ -180,9 +226,7 @@ class CreateVideoExternalFFmpeg:
                     command += ["-preset", nvenc_preset, "-rc", "vbr", "-cq", str(quality), "-b:v", "0"]
                 else:
                     command += ["-preset", "medium", "-crf", str(quality)]
-                command += ["-vf", "scale=in_range=full:out_range=limited:out_color_matrix=bt709",
-                            "-pix_fmt", "yuv420p", "-color_range", "tv", "-colorspace", "bt709",
-                            "-color_primaries", "bt709", "-color_trc", "iec61966-2-1"]
+                command += color_args
                 if encoder == "hevc_nvenc":
                     command += ["-tag:v", "hvc1"]
                 command += ["-movflags", "+faststart", output]
@@ -194,7 +238,11 @@ class CreateVideoExternalFFmpeg:
                         try:
                             for frame in images:
                                 comfy.model_management.throw_exception_if_processing_interrupted()
-                                pixels = frame.detach().clamp(0, 1).mul(255).round().to(device="cpu", dtype=torch.uint8).contiguous().numpy()
+                                if bit_depth == 10:
+                                    # Convert to float32 before scaling (float16 overflows at 65535).
+                                    pixels = frame.detach().to(device="cpu", dtype=torch.float32).clamp(0, 1).mul(65535).round().contiguous().numpy().astype("<u2")
+                                else:
+                                    pixels = frame.detach().clamp(0, 1).mul(255).round().to(device="cpu", dtype=torch.uint8).contiguous().numpy()
                                 process.stdin.write(pixels.tobytes())
                                 progress.update(1)
                             process.stdin.close()
@@ -214,8 +262,8 @@ class CreateVideoExternalFFmpeg:
                                 process.stdin.close()
                             except BrokenPipeError:
                                 pass
-            return (ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder),
-                    f"Encoder used: {encoder}")
+            return (ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder, bit_depth, color_space),
+                    f"Encoder used: {encoder}; bit depth: {bit_depth}; color space: {color_space}")
         except BaseException:
             if os.path.exists(output):
                 os.unlink(output)

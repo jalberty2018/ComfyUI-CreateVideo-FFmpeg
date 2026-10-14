@@ -33,16 +33,69 @@ No second video encoding occurs. Re-encoding options on Save Video are rejected;
 set quality on this node instead. WebM is not supported by this implementation.
 
 Encoders: `auto` (default), `h264_nvenc`, `hevc_nvenc`, `av1_nvenc`, `libx264` (CPU).
-`auto` selects `h264_nvenc` when `NVENC_ENABLED_HOST` is present in the ComfyUI
-process environment (regardless of its value), otherwise `libx264`.
+`auto` selects `h264_nvenc` for 8-bit or `hevc_nvenc` for 10-bit when
+`NVENC_ENABLED_HOST` is present (regardless of its value), otherwise `libx264`.
 Explicit encoder selections override this automatic choice.
 NVENC requires a compatible NVIDIA GPU, driver, FFmpeg build and container GPU
 video-driver access. AV1 encoding requires a GPU supporting AV1 NVENC.
 No silent CPU fallback occurs. Lower quality numbers mean higher quality and
 larger files (NVENC CQ / x264 CRF). NVENC presets run from p1 to p7; CPU uses medium.
 
-This version accepts **8-bit SDR/sRGB RGB images**, converted to limited-range
-YUV 4:2:0. Width/height must be even. HDR, 10-bit and alpha are not supported.
+Native Create Video color inputs are supported:
+
+- `bit_depth`: `auto`, `8`, `10`. Auto selects 8-bit for sRGB, 10-bit for HDR/HDR PQ.
+- `color_space`: `sRGB`, `HDR` (BT.2020/HLG), `HDR PQ` (BT.2020/PQ).
+
+These describe the **input** RGB values, just as in native Create Video. Selecting
+HDR does not transform sRGB images into HDR. Supply images already encoded with
+the selected transfer function and primaries. Values are clamped to [0, 1].
+The node converts RGB to limited-range YUV 4:2:0 with the appropriate BT.709 or
+BT.2020 matrix and writes primaries/transfer/matrix tags. 10-bit uses a 16-bit RGB
+pipe to avoid intermediate 8-bit quantization. Width/height must be even; no alpha.
+Explicit 8-bit HDR is allowed like the native node, but 10-bit is recommended.
+No mastering-display or content-light metadata is synthesized for PQ.
+Save Video stream-copy preserves the encoded bit depth and color tags.
+Existing workflows default to 8-bit sRGB when these new optional inputs are absent.
+
+The native advanced `codec` control is covered here by the existing `encoder`
+selector. Native `codec=none` (deferred encoding) is not applicable: this node
+always encodes with external FFmpeg when executed.
+
+### Ubuntu 24.04 support
+
+Ubuntu Noble ships FFmpeg 6.1.1 (package revision varies with updates).
+The required RGB formats, scale matrices and HLG/PQ color tags are supported.
+
+| Encoder | 8-bit | 10-bit | Requirements |
+| --- | --- | --- | --- |
+| `libx264` | Yes | Yes, with a 10-bit-capable build | CPU; 10-bit H.264 player support varies |
+| `h264_nvenc` | Yes | No in the targeted FFmpeg 6.1 path | NVIDIA GPU/driver |
+| `hevc_nvenc` | Yes | Yes | GPU supporting HEVC Main 10 |
+| `av1_nvenc` | Yes | Yes | GPU supporting AV1 NVENC |
+
+The node checks the actual executable's advertised encoder pixel formats before
+encoding. GPU/driver availability is checked by FFmpeg when the encoder starts;
+an advertised encoder alone does not establish that the GPU supports it.
+10-bit H.264 NVENC is rejected explicitly instead of silently reducing precision.
+For HDR on NVIDIA, use `encoder=hevc_nvenc`, `bit_depth=auto`, and the color space
+matching your input. Keep Save Video codec on `auto`.
+
+Check your server build with:
+
+```bash
+ffmpeg -version
+ffmpeg -hide_banner -h encoder=libx264
+ffmpeg -hide_banner -h encoder=hevc_nvenc
+ffmpeg -hide_banner -h encoder=av1_nvenc
+ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,pix_fmt,color_range,color_space,color_transfer,color_primaries -of json output.mp4
+```
+
+References: [native Create Video](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy_extras/nodes_video.py),
+[native RGB conversion](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy_api/latest/_input_impl/video_types.py),
+[Ubuntu package](https://packages.ubuntu.com/noble/ffmpeg),
+[FFmpeg 6.1 NVENC implementation](https://github.com/FFmpeg/FFmpeg/blob/n6.1.1/libavcodec/nvenc.c),
+[FFmpeg scale filter](https://ffmpeg.org/ffmpeg-filters.html#scale).
+
 Frames are streamed individually; the entire image batch is not copied to CPU.
 Encoding occurs when Create Video executes, rather than being deferred to Save Video.
 
