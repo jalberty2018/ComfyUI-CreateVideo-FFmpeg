@@ -86,7 +86,7 @@ class EncodingTests(unittest.TestCase):
                 with self.subTest(color=color, depth=depth):
                     video, report = self.node.CreateVideoExternalFFmpeg().create_video(
                         images, 24, "libx264", 20, "p4", self.ffmpeg,
-                        bit_depth=depth, color_space=color)
+                        bit_depth=depth, color_space=color)["result"]
                     self.assertEqual(video.get_bit_depth(), depth)
                     self.assertEqual(video.get_color_space(), color)
                     self.assertIn(f"bit depth: {depth}", report)
@@ -106,6 +106,66 @@ class EncodingTests(unittest.TestCase):
                     self.assertEqual(len(raw), 4 * 32 * 32 * 3)
                     with self.assertRaises(ValueError):
                         video.save_to(io.BytesIO(), bit_depth=10 if depth == 8 else 8)
+
+    def test_preview_keeps_full_resolution_output(self):
+        images = Tensor(np.zeros((4, 32, 64, 3), dtype=np.float32))
+        for enabled, percent, dimensions in [(False, 50, None), (True, 50, (32, 16)),
+                                               (True, 33, (20, 10)), (True, 1, (2, 2)),
+                                               (True, 100, (64, 32))]:
+            with self.subTest(enabled=enabled, percent=percent):
+                result = self.node.CreateVideoExternalFFmpeg().create_video(
+                    images, 24, "libx264", 20, "p4", self.ffmpeg,
+                    preview=enabled, preview_percent=percent)
+                video, _ = result["result"]
+                self.assertEqual(video.get_dimensions(), (64, 32))
+                def decoded_size(path):
+                    return len(subprocess.check_output([self.ffmpeg, "-v", "error", "-i", path,
+                                                       "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]))
+                self.assertEqual(decoded_size(video.path), 4 * 64 * 32 * 3)
+                previews = result["ui"]["ffmpeg_preview"]
+                if enabled:
+                    path = str(Path(self.temp.name) / previews[0]["filename"])
+                    self.assertNotEqual(path, video.path)
+                    self.assertEqual(decoded_size(path), 4 * dimensions[0] * dimensions[1] * 3)
+                    saved = str(Path(self.temp.name) / "saved-preview-test.mp4")
+                    video.save_to(saved)
+                    self.assertEqual(decoded_size(saved), 4 * 64 * 32 * 3)
+                else:
+                    self.assertEqual(previews, [])
+
+    def test_preview_failure_cleans_up_files(self):
+        images = Tensor(np.zeros((1, 32, 32, 3), dtype=np.float32))
+        before = set(Path(self.temp.name).iterdir())
+        with patch.object(self.node, "run_ffmpeg", side_effect=RuntimeError("preview failed")):
+            with self.assertRaisesRegex(RuntimeError, "preview failed"):
+                self.node.CreateVideoExternalFFmpeg().create_video(
+                    images, 24, "libx264", 20, "p4", self.ffmpeg, preview=True)
+        self.assertEqual(set(Path(self.temp.name).iterdir()), before)
+
+    def test_save_preview_switch_always_saves_full_video(self):
+        images = Tensor(np.zeros((4, 32, 64, 3), dtype=np.float32))
+        video = self.node.CreateVideoExternalFFmpeg().create_video(
+            images, 24, "libx264", 20, "p4", self.ffmpeg)["result"][0]
+        modules = {
+            "comfy.cli_args": types.SimpleNamespace(args=types.SimpleNamespace(disable_metadata=False)),
+            "comfy_api.latest": types.SimpleNamespace(Types=types.SimpleNamespace(VideoContainer=str, VideoCodec=str)),
+        }
+        for hidden in (False, True):
+            with self.subTest(hide_preview=hidden), patch.dict(sys.modules, modules), patch.object(
+                self.node.folder_paths, "get_output_directory", return_value=self.temp.name, create=True
+            ), patch.object(self.node.folder_paths, "get_save_image_path", create=True,
+                            return_value=(self.temp.name, "switch", 1, "", "switch")):
+                with patch.object(video, "save_to", wraps=video.save_to) as save:
+                    result = self.node.SaveVideoPreviewSwitch().save_video(
+                        video, "switch", "auto", "auto", hidden,
+                        prompt={"test": 1}, extra_pnginfo={"workflow": {"nodes": []}})
+                self.assertIs(result["result"][0], video)
+                self.assertEqual(save.call_args.kwargs["metadata"],
+                                 {"prompt": {"test": 1}, "workflow": {"nodes": []}})
+                raw = subprocess.check_output([self.ffmpeg, "-v", "error", "-i", result["result"][1],
+                                               "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+                self.assertEqual(len(raw), 4 * 64 * 32 * 3)
+                self.assertEqual(len(result["ui"]["ffmpeg_preview"]), 0 if hidden else 1)
 
     def test_auto_and_nvenc_formats(self):
         with patch.dict(os.environ, {}, clear=True):

@@ -175,17 +175,22 @@ class CreateVideoExternalFFmpeg:
                 "audio": ("AUDIO", {"tooltip": "Optional audio: one mono or stereo waveform batch. Encoded as AAC at 192 kbps. Short audio is padded with silence; long audio is trimmed to the video duration."}),
                 "bit_depth": (["auto", 8, 10], {"default": "auto", "tooltip": "Auto uses 8-bit for sRGB and 10-bit for HDR. Explicit bit depth is independent of color space."}),
                 "color_space": (["sRGB", "HDR", "HDR PQ"], {"default": "sRGB", "tooltip": "Color space of the input images: sRGB, BT.2020/HLG (HDR), or BT.2020/PQ (HDR PQ). Does not convert SDR into HDR."}),
+                "preview": ("BOOLEAN", {"default": False, "tooltip": "Generate a separate scaled video preview inside this node. The video output always keeps full resolution."}),
+                "preview_percent": ("INT", {"default": 50, "min": 1, "max": 100, "step": 1, "tooltip": "Preview width and height as a percentage of the original; 50 halves both dimensions. Rounded down to even pixels, minimum 2."}),
             },
         }
 
     RETURN_TYPES = ("VIDEO", "STRING")
     RETURN_NAMES = ("video", "report")
     FUNCTION = "create_video"
+    OUTPUT_NODE = True
     CATEGORY = "video/External FFmpeg"
     DESCRIPTION = "Encode 8/10-bit sRGB, HDR (HLG) or HDR PQ with external FFmpeg/NVENC. Connect to Save Video with codec auto."
 
     def create_video(self, images, fps, encoder, quality, nvenc_preset, ffmpeg_path="", audio=None,
-                     bit_depth="auto", color_space="sRGB"):
+                     bit_depth="auto", color_space="sRGB", preview=False, preview_percent=50):
+        if not math.isfinite(preview_percent) or not 1 <= preview_percent <= 100:
+            raise ValueError("preview_percent must be between 1 and 100")
         encoder, bit_depth, color_args = encoding_settings(encoder, bit_depth, color_space)
         if not math.isfinite(fps) or not 1 <= fps <= 240:
             raise ValueError("fps must be between 1 and 240")
@@ -203,6 +208,7 @@ class CreateVideoExternalFFmpeg:
         os.makedirs(temp_root, exist_ok=True)
         fd, output = tempfile.mkstemp(prefix="external-ffmpeg-", suffix=".mp4", dir=temp_root)
         os.close(fd)
+        preview_path = None
         try:
             with tempfile.TemporaryDirectory(prefix="ffmpeg-input-", dir=temp_root) as scratch:
                 command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
@@ -262,13 +268,86 @@ class CreateVideoExternalFFmpeg:
                                 process.stdin.close()
                             except BrokenPipeError:
                                 pass
-            return (ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder, bit_depth, color_space),
-                    f"Encoder used: {encoder}; bit depth: {bit_depth}; color space: {color_space}")
+            previews = []
+            report = f"Encoder used: {encoder}; bit depth: {bit_depth}; color space: {color_space}"
+            if preview:
+                preview_width = max(2, int(width * preview_percent / 100) // 2 * 2)
+                preview_height = max(2, int(height * preview_percent / 100) // 2 * 2)
+                fd, preview_path = tempfile.mkstemp(prefix="external-ffmpeg-preview-", suffix=".mp4", dir=temp_root)
+                os.close(fd)
+                comfy.model_management.throw_exception_if_processing_interrupted()
+                run_ffmpeg([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                            "-i", output, "-map", "0:v:0", "-map", "0:a?",
+                            "-vf", f"scale={preview_width}:{preview_height}",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                            "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", preview_path])
+                previews.append({"filename": os.path.basename(preview_path), "subfolder": "", "type": "temp"})
+                report += f"; preview: {preview_width}x{preview_height} ({preview_percent}%)"
+            return {"ui": {"ffmpeg_preview": previews}, "result": (
+                ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder, bit_depth, color_space), report)}
         except BaseException:
+            if preview_path and os.path.exists(preview_path):
+                os.unlink(preview_path)
             if os.path.exists(output):
                 os.unlink(output)
             raise
 
 
-NODE_CLASS_MAPPINGS = {"CreateVideoExternalFFmpegNVENC": CreateVideoExternalFFmpeg}
-NODE_DISPLAY_NAME_MAPPINGS = {"CreateVideoExternalFFmpegNVENC": "Create Video (External FFmpeg / NVENC)"}
+class SaveVideoPreviewSwitch:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video": ("VIDEO",),
+                "filename_prefix": ("STRING", {"default": "video/ComfyUI"}),
+                "format": (["auto", "mp4", "mkv", "webm"], {"default": "auto"}),
+                "codec": (["auto", "h264", "av1"], {"default": "auto",
+                    "tooltip": "Use auto for videos already encoded by Create Video (External FFmpeg / NVENC)."}),
+                "hide_preview": ("BOOLEAN", {"default": True,
+                    "tooltip": "ON: save without displaying a preview. OFF: save and display the saved video."}),
+            },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    RETURN_TYPES = ("VIDEO", "STRING")
+    RETURN_NAMES = ("video", "saved_path")
+    FUNCTION = "save_video"
+    CATEGORY = "video/External FFmpeg"
+    OUTPUT_NODE = True
+    DESCRIPTION = "Save a VIDEO at its original resolution. Enable hide_preview to save without showing the video on screen."
+
+    def save_video(self, video, filename_prefix, format, codec, hide_preview=True,
+                   prompt=None, extra_pnginfo=None):
+        from comfy.cli_args import args
+        from comfy_api.latest import Types
+
+        if format not in ("auto", "mp4", "mkv", "webm") or codec not in ("auto", "h264", "av1"):
+            raise ValueError("Unsupported video format or codec")
+        if format == "auto":
+            format = "webm" if codec == "av1" else "mp4"
+        if format == "webm" and codec == "h264":
+            raise ValueError("WebM does not support H.264; select AV1 or another container.")
+        width, height = video.get_dimensions()
+        directory, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+            filename_prefix, folder_paths.get_output_directory(), width, height)
+        metadata = None
+        if not args.disable_metadata:
+            metadata = dict(extra_pnginfo or {})
+            if prompt is not None:
+                metadata["prompt"] = prompt
+            metadata = metadata or None
+        filename = f"{filename}_{counter:05}_.{format}"
+        path = os.path.join(directory, filename)
+        video.save_to(path, format=Types.VideoContainer(format), codec=Types.VideoCodec(codec), metadata=metadata)
+        previews = [] if hide_preview else [{"filename": filename, "subfolder": subfolder, "type": "output"}]
+        return {"ui": {"ffmpeg_preview": previews}, "result": (video, path)}
+
+
+NODE_CLASS_MAPPINGS = {
+    "CreateVideoExternalFFmpegNVENC": CreateVideoExternalFFmpeg,
+    "SaveVideoPreviewSwitch": SaveVideoPreviewSwitch,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "CreateVideoExternalFFmpegNVENC": "Create Video (External FFmpeg / NVENC)",
+    "SaveVideoPreviewSwitch": "Save Video (Preview Switch)",
+}
