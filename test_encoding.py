@@ -84,7 +84,7 @@ class EncodingTests(unittest.TestCase):
         for color, transfer in [("sRGB", "iec61966-2-1"), ("HDR", "arib-std-b67"), ("HDR PQ", "smpte2084")]:
             for depth in (8, 10):
                 with self.subTest(color=color, depth=depth):
-                    video, report = self.node.CreateVideoExternalFFmpeg().create_video(
+                    video, report, preview_video = self.node.CreateVideoExternalFFmpeg().create_video(
                         images, 24, "libx264", 20, "p4", self.ffmpeg,
                         bit_depth=depth, color_space=color)["result"]
                     self.assertEqual(video.get_bit_depth(), depth)
@@ -116,7 +116,7 @@ class EncodingTests(unittest.TestCase):
                 result = self.node.CreateVideoExternalFFmpeg().create_video(
                     images, 24, "libx264", 20, "p4", self.ffmpeg,
                     preview=enabled, preview_percent=percent)
-                video, _ = result["result"]
+                video, _, preview_video = result["result"]
                 self.assertEqual(video.get_dimensions(), (64, 32))
                 def decoded_size(path):
                     return len(subprocess.check_output([self.ffmpeg, "-v", "error", "-i", path,
@@ -124,6 +124,12 @@ class EncodingTests(unittest.TestCase):
                 self.assertEqual(decoded_size(video.path), 4 * 64 * 32 * 3)
                 previews = result["ui"]["ffmpeg_preview"]
                 if enabled:
+                    self.assertEqual(preview_video.get_dimensions(), dimensions)
+                    self.assertEqual(preview_video.get_frame_count(), 4)
+                    self.assertEqual(preview_video.get_frame_rate(), video.get_frame_rate())
+                    preview_saved = str(Path(self.temp.name) / "saved-preview-output.mp4")
+                    preview_video.save_to(preview_saved)
+                    self.assertEqual(decoded_size(preview_saved), 4 * dimensions[0] * dimensions[1] * 3)
                     path = str(Path(self.temp.name) / previews[0]["filename"])
                     self.assertNotEqual(path, video.path)
                     self.assertEqual(decoded_size(path), 4 * dimensions[0] * dimensions[1] * 3)
@@ -131,6 +137,7 @@ class EncodingTests(unittest.TestCase):
                     video.save_to(saved)
                     self.assertEqual(decoded_size(saved), 4 * 64 * 32 * 3)
                 else:
+                    self.assertIsNone(preview_video)
                     self.assertEqual(previews, [])
 
     def test_preview_failure_cleans_up_files(self):

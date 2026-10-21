@@ -29,6 +29,12 @@ even pixels, with a minimum of 2. The `video` output and Save Video always
 retain the original full resolution. Preview is off by default, including for
 existing workflows, and no preview file is generated while off.
 
+The third output, **preview_video** (VIDEO), provides the scaled preview for
+connecting to other video nodes or Save Video. It is empty (`None`) when preview
+is off; enable preview before using this output downstream. The existing
+`video` and `report` outputs keep their positions. After updating, restart
+ComfyUI and refresh the browser; recreate the node if the new socket is missing.
+
 The preview uses a separate H.264 8-bit encode with libx264 and preserves audio,
 frame rate and duration. This requires libx264 even when the main encoder uses
 NVENC and adds encoding time. It is for checking motion/composition; HDR is not

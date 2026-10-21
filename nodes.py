@@ -180,8 +180,8 @@ class CreateVideoExternalFFmpeg:
             },
         }
 
-    RETURN_TYPES = ("VIDEO", "STRING")
-    RETURN_NAMES = ("video", "report")
+    RETURN_TYPES = ("VIDEO", "STRING", "VIDEO")
+    RETURN_NAMES = ("video", "report", "preview_video")
     FUNCTION = "create_video"
     OUTPUT_NODE = True
     CATEGORY = "video/External FFmpeg"
@@ -269,6 +269,7 @@ class CreateVideoExternalFFmpeg:
                             except BrokenPipeError:
                                 pass
             previews = []
+            preview_video = None
             report = f"Encoder used: {encoder}; bit depth: {bit_depth}; color space: {color_space}"
             if preview:
                 preview_width = max(2, int(width * preview_percent / 100) // 2 * 2)
@@ -281,10 +282,12 @@ class CreateVideoExternalFFmpeg:
                             "-vf", f"scale={preview_width}:{preview_height}",
                             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                             "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", preview_path])
+                preview_video = ExternalFFmpegVideo(
+                    preview_path, ffmpeg, preview_width, preview_height, count, rate, "libx264", 8, color_space)
                 previews.append({"filename": os.path.basename(preview_path), "subfolder": "", "type": "temp"})
                 report += f"; preview: {preview_width}x{preview_height} ({preview_percent}%)"
             return {"ui": {"ffmpeg_preview": previews}, "result": (
-                ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder, bit_depth, color_space), report)}
+                ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder, bit_depth, color_space), report, preview_video)}
         except BaseException:
             if preview_path and os.path.exists(preview_path):
                 os.unlink(preview_path)
