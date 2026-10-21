@@ -17,6 +17,15 @@ VideoHelperSuite does not need to be installed.
 
 ## Workflow
 
+Set **disable_metadata = true** on Create Video to prevent workflow/prompt
+metadata supplied by downstream Save Video nodes from being passed to FFmpeg.
+This applies to both `video` and `preview_video` when saved directly, including
+with the built-in Save Video and Save Video (Preview Switch). It avoids
+`Argument list too long` errors caused by large workflow metadata. The saved
+file will not include that workflow/prompt; video/audio and color tags remain
+unchanged. Default is false to preserve existing workflows. Nodes that decode
+or recreate the VIDEO object may not retain this setting.
+
 `IMAGE -> Create Video (External FFmpeg / NVENC) -> Save Video`
 
 Optional AUDIO input: one mono or stereo batch. Audio is encoded as AAC,

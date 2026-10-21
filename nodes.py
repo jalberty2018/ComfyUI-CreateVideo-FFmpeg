@@ -84,13 +84,14 @@ def value_of(value):
 class ExternalFFmpegVideo(InputImpl.VideoFromFile):
     """Use external stream-copy for Save Video; inherited decoding stays compatible."""
 
-    def __init__(self, path, ffmpeg, width, height, count, fps, encoder, bit_depth=8, color_space="sRGB"):
+    def __init__(self, path, ffmpeg, width, height, count, fps, encoder, bit_depth=8, color_space="sRGB", disable_metadata=False):
         super().__init__(path)
         self.path = path
         self.ffmpeg = ffmpeg
         self.width, self.height = width, height
         self.count, self.fps, self.encoder = count, fps, encoder
         self.bit_depth, self.color_space = bit_depth, color_space
+        self.disable_metadata = disable_metadata
 
     def get_dimensions(self):
         return self.width, self.height
@@ -138,7 +139,7 @@ class ExternalFFmpegVideo(InputImpl.VideoFromFile):
         try:
             command = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
                        "-i", self.path, "-map", "0:v:0", "-map", "0:a?", "-c", "copy"]
-            for key, value in (metadata or {}).items():
+            for key, value in ({} if self.disable_metadata else (metadata or {})).items():
                 command += ["-metadata", f"{key}={value if isinstance(value, str) else json.dumps(value)}"]
             if container == "mp4":
                 command += ["-movflags", "+faststart+use_metadata_tags"]
@@ -177,6 +178,7 @@ class CreateVideoExternalFFmpeg:
                 "color_space": (["sRGB", "HDR", "HDR PQ"], {"default": "sRGB", "tooltip": "Color space of the input images: sRGB, BT.2020/HLG (HDR), or BT.2020/PQ (HDR PQ). Does not convert SDR into HDR."}),
                 "preview": ("BOOLEAN", {"default": False, "tooltip": "Generate a separate scaled video preview inside this node. The video output always keeps full resolution."}),
                 "preview_percent": ("INT", {"default": 50, "min": 1, "max": 100, "step": 1, "tooltip": "Preview width and height as a percentage of the original; 50 halves both dimensions. Rounded down to even pixels, minimum 2."}),
+                "disable_metadata": ("BOOLEAN", {"default": False, "tooltip": "ON: ignore workflow/prompt metadata supplied by Save Video for both video outputs. Prevents oversized metadata command-line errors. OFF: include metadata as usual."}),
             },
         }
 
@@ -188,7 +190,7 @@ class CreateVideoExternalFFmpeg:
     DESCRIPTION = "Encode 8/10-bit sRGB, HDR (HLG) or HDR PQ with external FFmpeg/NVENC. Connect to Save Video with codec auto."
 
     def create_video(self, images, fps, encoder, quality, nvenc_preset, ffmpeg_path="", audio=None,
-                     bit_depth="auto", color_space="sRGB", preview=False, preview_percent=50):
+                     bit_depth="auto", color_space="sRGB", preview=False, preview_percent=50, disable_metadata=False):
         if not math.isfinite(preview_percent) or not 1 <= preview_percent <= 100:
             raise ValueError("preview_percent must be between 1 and 100")
         encoder, bit_depth, color_args = encoding_settings(encoder, bit_depth, color_space)
@@ -283,11 +285,13 @@ class CreateVideoExternalFFmpeg:
                             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                             "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", preview_path])
                 preview_video = ExternalFFmpegVideo(
-                    preview_path, ffmpeg, preview_width, preview_height, count, rate, "libx264", 8, color_space)
+                    preview_path, ffmpeg, preview_width, preview_height, count, rate, "libx264", 8, color_space, disable_metadata)
                 previews.append({"filename": os.path.basename(preview_path), "subfolder": "", "type": "temp"})
                 report += f"; preview: {preview_width}x{preview_height} ({preview_percent}%)"
+            if disable_metadata:
+                report += "; workflow metadata: disabled"
             return {"ui": {"ffmpeg_preview": previews}, "result": (
-                ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder, bit_depth, color_space), report, preview_video)}
+                ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder, bit_depth, color_space, disable_metadata), report, preview_video)}
         except BaseException:
             if preview_path and os.path.exists(preview_path):
                 os.unlink(preview_path)

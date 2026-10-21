@@ -174,6 +174,30 @@ class EncodingTests(unittest.TestCase):
                 self.assertEqual(len(raw), 4 * 64 * 32 * 3)
                 self.assertEqual(len(result["ui"]["ffmpeg_preview"]), 0 if hidden else 1)
 
+    def test_disable_metadata_on_both_outputs(self):
+        images = Tensor(np.zeros((2, 32, 64, 3), dtype=np.float32))
+        for disabled in (False, True):
+            result = self.node.CreateVideoExternalFFmpeg().create_video(
+                images, 24, "libx264", 20, "p4", self.ffmpeg,
+                preview=True, disable_metadata=disabled)
+            for index in (0, 2):
+                with self.subTest(disabled=disabled, output=index):
+                    video = result["result"][index]
+                    # Oversized workflow must never reach the OS argument list when disabled.
+                    marker = "workflow_metadata_marker"
+                    metadata = {"workflow": marker + ("x" * 200000 if disabled else ""),
+                                "prompt": {"test": 1}}
+                    destination = str(Path(self.temp.name) / f"metadata-{disabled}-{index}.mp4")
+                    with patch.object(self.node, "run_ffmpeg", wraps=self.node.run_ffmpeg) as run:
+                        video.save_to(destination, metadata=metadata)
+                    command = run.call_args.args[0]
+                    self.assertEqual("-metadata" in command, not disabled)
+                    self.assertEqual(marker.encode() in Path(destination).read_bytes(), not disabled)
+                    def digest(path):
+                        return subprocess.check_output([self.ffmpeg, "-v", "error", "-i", path,
+                                                       "-map", "0:v:0", "-c", "copy", "-f", "hash", "-"])
+                    self.assertEqual(digest(video.path), digest(destination))
+
     def test_auto_and_nvenc_formats(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(self.node.encoding_settings("auto", "auto", "sRGB")[:2], ("libx264", 8))
