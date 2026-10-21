@@ -273,6 +273,8 @@ class CreateVideoExternalFFmpeg:
             previews = []
             preview_video = None
             report = f"Encoder used: {encoder}; bit depth: {bit_depth}; color space: {color_space}"
+            timing = f"fps: {float(rate):.6g}; duration: {float(count / rate):.3f} s"
+            report += f"\nvideo: size: {width}x{height} px; {timing}"
             if preview:
                 preview_width = max(2, int(width * preview_percent / 100) // 2 * 2)
                 preview_height = max(2, int(height * preview_percent / 100) // 2 * 2)
@@ -287,9 +289,11 @@ class CreateVideoExternalFFmpeg:
                 preview_video = ExternalFFmpegVideo(
                     preview_path, ffmpeg, preview_width, preview_height, count, rate, "libx264", 8, color_space, disable_metadata)
                 previews.append({"filename": os.path.basename(preview_path), "subfolder": "", "type": "temp"})
-                report += f"; preview: {preview_width}x{preview_height} ({preview_percent}%)"
+                report += f"\npreview_video: size: {preview_width}x{preview_height} px ({preview_percent}%); {timing}"
+            else:
+                report += "\npreview_video: disabled"
             if disable_metadata:
-                report += "; workflow metadata: disabled"
+                report += "\nworkflow metadata: disabled"
             return {"ui": {"ffmpeg_preview": previews}, "result": (
                 ExternalFFmpegVideo(output, ffmpeg, width, height, count, rate, encoder, bit_depth, color_space, disable_metadata), report, preview_video)}
         except BaseException:

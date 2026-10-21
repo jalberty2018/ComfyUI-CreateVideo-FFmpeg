@@ -116,7 +116,8 @@ class EncodingTests(unittest.TestCase):
                 result = self.node.CreateVideoExternalFFmpeg().create_video(
                     images, 24, "libx264", 20, "p4", self.ffmpeg,
                     preview=enabled, preview_percent=percent)
-                video, _, preview_video = result["result"]
+                video, report, preview_video = result["result"]
+                self.assertIn("video: size: 64x32 px; fps: 24; duration: 0.167 s", report)
                 self.assertEqual(video.get_dimensions(), (64, 32))
                 def decoded_size(path):
                     return len(subprocess.check_output([self.ffmpeg, "-v", "error", "-i", path,
@@ -124,6 +125,7 @@ class EncodingTests(unittest.TestCase):
                 self.assertEqual(decoded_size(video.path), 4 * 64 * 32 * 3)
                 previews = result["ui"]["ffmpeg_preview"]
                 if enabled:
+                    self.assertIn(f"preview_video: size: {dimensions[0]}x{dimensions[1]} px ({percent}%); fps: 24; duration: 0.167 s", report)
                     self.assertEqual(preview_video.get_dimensions(), dimensions)
                     self.assertEqual(preview_video.get_frame_count(), 4)
                     self.assertEqual(preview_video.get_frame_rate(), video.get_frame_rate())
@@ -137,6 +139,7 @@ class EncodingTests(unittest.TestCase):
                     video.save_to(saved)
                     self.assertEqual(decoded_size(saved), 4 * 64 * 32 * 3)
                 else:
+                    self.assertIn("preview_video: disabled", report)
                     self.assertIsNone(preview_video)
                     self.assertEqual(previews, [])
 

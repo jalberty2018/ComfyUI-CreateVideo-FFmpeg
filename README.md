@@ -17,6 +17,11 @@ VideoHelperSuite does not need to be installed.
 
 ## Workflow
 
+The `report` output lists resolution (width × height in pixels), FPS and duration
+in seconds on separate lines for `video` and `preview_video`. Duration is frame
+count divided by the encoded frame rate, shown to three decimal places. When
+preview is off, its line reads `preview_video: disabled`.
+
 Set **disable_metadata = true** on Create Video to prevent workflow/prompt
 metadata supplied by downstream Save Video nodes from being passed to FFmpeg.
 This applies to both `video` and `preview_video` when saved directly, including
