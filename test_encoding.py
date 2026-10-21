@@ -198,6 +198,33 @@ class EncodingTests(unittest.TestCase):
                                                        "-map", "0:v:0", "-c", "copy", "-f", "hash", "-"])
                     self.assertEqual(digest(video.path), digest(destination))
 
+    def test_preview_only_uses_temp_and_preserves_video(self):
+        images = Tensor(np.zeros((2, 32, 64, 3), dtype=np.float32))
+        video = self.node.CreateVideoExternalFFmpeg().create_video(
+            images, 24, "libx264", 20, "p4", self.ffmpeg)["result"][0]
+        modules = {"comfy_api.latest": types.SimpleNamespace(
+            Types=types.SimpleNamespace(VideoContainer=str, VideoCodec=str))}
+        with patch.dict(sys.modules, modules), patch.object(
+            self.node.folder_paths, "get_output_directory", create=True,
+            side_effect=AssertionError("Preview must not access output directory")
+        ), patch.object(video, "save_to", wraps=video.save_to) as save:
+            result = self.node.PreviewVideoExternalFFmpeg().preview_video(video)
+        self.assertIs(result["result"][0], video)
+        self.assertIsNone(save.call_args.kwargs["metadata"])
+        preview = result["ui"]["ffmpeg_preview"][0]
+        self.assertEqual(preview["type"], "temp")
+        path = Path(self.temp.name) / preview["filename"]
+        raw = subprocess.check_output([self.ffmpeg, "-v", "error", "-i", str(path),
+                                       "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+        self.assertEqual(len(raw), 2 * 32 * 64 * 3)
+        before = set(Path(self.temp.name).iterdir())
+        with patch.dict(sys.modules, modules), patch.object(video, "save_to", side_effect=RuntimeError("failed")):
+            with self.assertRaisesRegex(RuntimeError, "failed"):
+                self.node.PreviewVideoExternalFFmpeg().preview_video(video)
+        self.assertEqual(set(Path(self.temp.name).iterdir()), before)
+        empty = self.node.PreviewVideoExternalFFmpeg().preview_video(None)
+        self.assertEqual(empty["ui"]["ffmpeg_preview"], [])
+
     def test_auto_and_nvenc_formats(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(self.node.encoding_settings("auto", "auto", "sRGB")[:2], ("libx264", 8))

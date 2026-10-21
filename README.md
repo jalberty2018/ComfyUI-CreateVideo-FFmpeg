@@ -137,6 +137,19 @@ Encoded source files remain in ComfyUI's temp directory for cached VIDEO outputs
 they are not removed immediately after saving because the output may be reused.
 Manage these with normal ComfyUI temp-directory cleanup when no workflow uses them.
 
+## Preview Video (No Save)
+
+Connect a VIDEO to **Preview Video (No Save)** to display it without saving to
+the output directory. Connect Create Video's `preview_video` for the scaled
+version (enable `preview` there), or `video` for full resolution. An empty
+preview input clears the player. The node passes the original VIDEO through.
+
+Browser playback uses a temporary MP4 in ComfyUI's temp directory, removed by
+normal temp cleanup. No workflow/prompt metadata is added. External FFmpeg
+videos are stream-copied; other VIDEO implementations use their normal MP4
+save method. Browser codec support still applies; H.264 8-bit is the most
+compatible choice. Restart ComfyUI and refresh the browser after updating.
+
 ## Save Video (Preview Switch)
 
 Use `VIDEO -> Save Video (Preview Switch)` to save a video with optional display.

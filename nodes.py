@@ -300,6 +300,39 @@ class CreateVideoExternalFFmpeg:
             raise
 
 
+class PreviewVideoExternalFFmpeg:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"video": ("VIDEO", {"tooltip": "Video to display. Connect preview_video for a scaled preview, or video for full resolution."})}}
+
+    RETURN_TYPES = ("VIDEO",)
+    RETURN_NAMES = ("video",)
+    FUNCTION = "preview_video"
+    CATEGORY = "video/External FFmpeg"
+    OUTPUT_NODE = True
+    DESCRIPTION = "Display a video using a temporary file. Does not save to the output directory or embed workflow metadata. Playback depends on browser codec support."
+
+    def preview_video(self, video):
+        if video is None:
+            return {"ui": {"ffmpeg_preview": []}, "result": (None,)}
+        from comfy_api.latest import Types
+
+        temp_root = folder_paths.get_temp_directory()
+        os.makedirs(temp_root, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix="video-preview-only-", suffix=".mp4", dir=temp_root)
+        os.close(fd)
+        try:
+            video.save_to(path, format=Types.VideoContainer("mp4"),
+                          codec=Types.VideoCodec("auto"), metadata=None)
+        except BaseException:
+            if os.path.exists(path):
+                os.unlink(path)
+            raise
+        return {"ui": {"ffmpeg_preview": [{"filename": os.path.basename(path),
+                                            "subfolder": "", "type": "temp"}]},
+                "result": (video,)}
+
+
 class SaveVideoPreviewSwitch:
     @classmethod
     def INPUT_TYPES(cls):
@@ -353,8 +386,10 @@ class SaveVideoPreviewSwitch:
 NODE_CLASS_MAPPINGS = {
     "CreateVideoExternalFFmpegNVENC": CreateVideoExternalFFmpeg,
     "SaveVideoPreviewSwitch": SaveVideoPreviewSwitch,
+    "PreviewVideoExternalFFmpeg": PreviewVideoExternalFFmpeg,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CreateVideoExternalFFmpegNVENC": "Create Video (External FFmpeg / NVENC)",
     "SaveVideoPreviewSwitch": "Save Video (Preview Switch)",
+    "PreviewVideoExternalFFmpeg": "Preview Video (No Save)",
 }

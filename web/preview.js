@@ -4,7 +4,7 @@ import { api } from "../../../scripts/api.js";
 app.registerExtension({
     name: "CreateVideoExternalFFmpeg.Preview",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (!["CreateVideoExternalFFmpegNVENC", "SaveVideoPreviewSwitch"].includes(nodeData.name)) return;
+        if (!["CreateVideoExternalFFmpegNVENC", "SaveVideoPreviewSwitch", "PreviewVideoExternalFFmpeg"].includes(nodeData.name)) return;
         const onExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (message) {
             onExecuted?.apply(this, arguments);
