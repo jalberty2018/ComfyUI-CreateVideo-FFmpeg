@@ -166,6 +166,8 @@ Saved videos are always reported as standard `video` outputs for ComfyUI's
 **Media Assets > Generated**, independently of `hide_preview`. Restart ComfyUI,
 refresh the browser and run the save node again after updating. Historical
 executions from older versions are not rewritten.
+Video players fill the available preview area when the node is resized,
+preserving the video's aspect ratio. This applies to all three video nodes.
 
 Like Save Video, the node supports `filename_prefix`, automatic numbering,
 `format`, `codec`, and embedded workflow metadata (unless disabled in ComfyUI).

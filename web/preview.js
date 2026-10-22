@@ -48,15 +48,22 @@ app.registerExtension({
                 video.loop = true;
                 video.muted = true;
                 video.playsInline = true;
-                video.style.cssText = "width:100%;height:100%;object-fit:contain;";
-                this.ffmpegPreviewWidget = this.addDOMWidget("ffmpeg_preview", "video", video, { serialize: false });
+                video.style.cssText = "display:block;width:100%;height:100%;min-width:0;min-height:0;object-fit:contain;";
+                // Let ComfyUI allocate the available node height to the player.
+                // A fixed computeSize height prevents it from growing on resize.
+                this.ffmpegPreviewWidget = this.addDOMWidget("ffmpeg_preview", "video", video, {
+                    serialize: false,
+                    getMinHeight: () => 120,
+                    getHeight: () => "100%",
+                });
                 this.ffmpegPreviewWidget.ffmpegMode = mode;
-                this.ffmpegPreviewWidget.computeSize = (width) => [width, 220];
+                const removeWidget = this.ffmpegPreviewWidget.onRemove?.bind(this.ffmpegPreviewWidget);
                 this.ffmpegPreviewWidget.onRemove = () => {
                     video.pause();
                     video.removeAttribute("src");
                     video.load();
                     video.remove();
+                    removeWidget?.();
                 };
             }
             this.ffmpegPreviewWidget.element.src = api.apiURL("/view?" + new URLSearchParams(preview));
