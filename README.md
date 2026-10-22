@@ -158,9 +158,14 @@ compatible choice. Restart ComfyUI and refresh the browser after updating.
 ## Save Video (Preview Switch)
 
 Use `VIDEO -> Save Video (Preview Switch)` to save a video with optional display.
-**hide_preview ON** (default) saves the file without showing a video player;
+**hide_preview ON** (default) saves the file and shows a **Download video** button
+in the preview area without loading a video player;
 **OFF** saves and displays the saved video. Running with ON also clears a preview
 from a previous execution. This switch only affects this node's preview.
+Saved videos are always reported as standard `video` outputs for ComfyUI's
+**Media Assets > Generated**, independently of `hide_preview`. Restart ComfyUI,
+refresh the browser and run the save node again after updating. Historical
+executions from older versions are not rewritten.
 
 Like Save Video, the node supports `filename_prefix`, automatic numbering,
 `format`, `codec`, and embedded workflow metadata (unless disabled in ComfyUI).

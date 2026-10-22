@@ -175,7 +175,9 @@ class EncodingTests(unittest.TestCase):
                 raw = subprocess.check_output([self.ffmpeg, "-v", "error", "-i", result["result"][1],
                                                "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
                 self.assertEqual(len(raw), 4 * 64 * 32 * 3)
-                self.assertEqual(len(result["ui"]["ffmpeg_preview"]), 0 if hidden else 1)
+                self.assertEqual(result["ui"]["video"], [
+                    {"filename": "switch_00001_.mp4", "subfolder": "", "type": "output"}])
+                self.assertEqual(result["ui"]["ffmpeg_hide_preview"], [hidden])
 
     def test_disable_metadata_on_both_outputs(self):
         images = Tensor(np.zeros((2, 32, 64, 3), dtype=np.float32))

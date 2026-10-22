@@ -348,7 +348,7 @@ class SaveVideoPreviewSwitch:
                 "codec": (["auto", "h264", "av1"], {"default": "auto",
                     "tooltip": "Use auto for videos already encoded by Create Video (External FFmpeg / NVENC)."}),
                 "hide_preview": ("BOOLEAN", {"default": True,
-                    "tooltip": "ON: save without displaying a preview. OFF: save and display the saved video."}),
+                    "tooltip": "ON: save and show a download button without loading a preview. OFF: save and display the saved video."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -383,8 +383,11 @@ class SaveVideoPreviewSwitch:
         filename = f"{filename}_{counter:05}_.{format}"
         path = os.path.join(directory, filename)
         video.save_to(path, format=Types.VideoContainer(format), codec=Types.VideoCodec(codec), metadata=metadata)
-        previews = [] if hide_preview else [{"filename": filename, "subfolder": subfolder, "type": "output"}]
-        return {"ui": {"ffmpeg_preview": previews}, "result": (video, path)}
+        saved_file = {"filename": filename, "subfolder": subfolder, "type": "output"}
+        # Standard media output is indexed by ComfyUI history/Media Assets.
+        # Keep the node's display preference separate from file registration.
+        return {"ui": {"video": [saved_file], "ffmpeg_hide_preview": [hide_preview]},
+                "result": (video, path)}
 
 
 NODE_CLASS_MAPPINGS = {
