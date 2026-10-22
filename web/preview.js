@@ -7,7 +7,17 @@ app.registerExtension({
         if (!["CreateVideoExternalFFmpegNVENC", "SaveVideoPreviewSwitch", "PreviewVideoExternalFFmpeg"].includes(nodeData.name)) return;
         const onExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (message) {
+            const previousSize = [...this.size];
             onExecuted?.apply(this, arguments);
+            const updateSize = () => {
+                const minimumSize = this.computeSize();
+                // New results may need more room, but must not undo manual resizing.
+                this.setSize([
+                    Math.max(previousSize[0], minimumSize[0]),
+                    Math.max(previousSize[1], minimumSize[1]),
+                ]);
+                this.setDirtyCanvas(true, true);
+            };
             const savedVideo = nodeData.name === "SaveVideoPreviewSwitch" ? message.video?.[0] : null;
             const hidePreview = message.ffmpeg_hide_preview?.[0] ?? true;
             // Retain support for cached results from earlier node versions.
@@ -20,8 +30,7 @@ app.registerExtension({
                 this.ffmpegPreviewWidget = null;
             }
             if (!mode) {
-                this.setSize(this.computeSize());
-                this.setDirtyCanvas(true, true);
+                updateSize();
                 return;
             }
             if (mode === "download") {
@@ -38,8 +47,7 @@ app.registerExtension({
                 link.href = api.apiURL("/view?" + new URLSearchParams(download));
                 link.download = download.filename;
                 link.title = download.filename;
-                this.setSize(this.computeSize());
-                this.setDirtyCanvas(true, true);
+                updateSize();
                 return;
             }
             if (!this.ffmpegPreviewWidget) {
@@ -67,8 +75,7 @@ app.registerExtension({
                 };
             }
             this.ffmpegPreviewWidget.element.src = api.apiURL("/view?" + new URLSearchParams(preview));
-            this.setSize(this.computeSize());
-            this.setDirtyCanvas(true, true);
+            updateSize();
         };
     },
 });

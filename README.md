@@ -168,6 +168,9 @@ refresh the browser and run the save node again after updating. Historical
 executions from older versions are not rewritten.
 Video players fill the available preview area when the node is resized,
 preserving the video's aspect ratio. This applies to all three video nodes.
+New results preserve the node's current size, including when switching between
+the player and download button. Nodes only grow if the content needs more room;
+you can still manually shrink them.
 
 Like Save Video, the node supports `filename_prefix`, automatic numbering,
 `format`, `codec`, and embedded workflow metadata (unless disabled in ComfyUI).
